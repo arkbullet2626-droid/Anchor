@@ -141,6 +141,7 @@ public sealed class Engine
             {
                 case Windows.MoveOutcome.Moved:
                     result.Moved++;
+                    Log.Write($"  moved {label} \"{Windows.Short(l.Title)}\" [{l.Hwnd}] to {(s.State == ShowState.Normal ? rect : normal)} {s.State} on {nm.Name}");
                     undo.Windows.Add(l.Clone());
                     if (s.State == ShowState.Normal) toSettle.Add((l, rect));
                     break;

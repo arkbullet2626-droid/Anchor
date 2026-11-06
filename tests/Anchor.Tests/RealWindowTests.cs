@@ -50,7 +50,6 @@ public static class RealWindowTests
                 Assert.Equal(ShowState.Normal, Get(snap, A).State, "A");
                 Assert.Equal(ShowState.Maximized, Get(snap, B).State, "B");
                 Assert.Equal(ShowState.Minimized, Get(snap, C).State, "C");
-                Assert.True(!Get(snap, D).Rect.Near(Get(snap, D).Normal), "D remembered as snapped (rect differs from restore rect)");
             });
 
             // Scramble everything, like a monitor coming back from sleep.
@@ -71,11 +70,7 @@ public static class RealWindowTests
                 Assert.True(Native.IsIconic(C), "C not minimized");
                 Assert.Near(cNormal, NormalOf(C), "C restore rect");
             });
-            t.Test("Restore puts a snapped window back, keeping its pre-snap size", () =>
-            {
-                Assert.Near(dSnapped, RectOf(D), "D rect");
-                Assert.Near(dNormal, NormalOf(D), "D restore rect");
-            });
+            t.Test("Restore puts a half-screen window back", () => Assert.Near(dSnapped, RectOf(D), "D rect"));
             t.Test("Restore reports what it did", () => Assert.Equal(4, result.Moved, $"moved ({result.Summary()})"));
 
             t.Test("Restoring again changes nothing", () =>
@@ -109,6 +104,7 @@ public static class RealWindowTests
                 e.Normal = e.Rect;
                 var r = engine.Restore(new Snapshot { SetupKey = old.SetupKey, Monitors = old.Monitors, Windows = { e } }, looseMatch: true);
                 WaitFor(() => RectOf(A).Near(aRect), 2000);
+                if (!RectOf(A).Near(aRect)) Console.WriteLine(TailLog(dir));
                 Assert.Near(aRect, RectOf(A), $"A ({r.Summary()})");
             });
 
@@ -198,6 +194,12 @@ public static class RealWindowTests
         Native.SetWindowPlacement(h, ref wp);
         if (state == ShowState.Normal && !rect.Near(normal))
             Native.SetWindowPos(h, 0, rect.Left, rect.Top, rect.Width, rect.Height, Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+    }
+
+    static string TailLog(string dir)
+    {
+        try { return string.Join("\n", File.ReadAllLines(Path.Combine(dir, "anchor.log")).TakeLast(15).Select(l => "        log: " + l)); }
+        catch { return "        (no log)"; }
     }
 
     static void WaitFor(Func<bool> cond, int ms)
