@@ -1,5 +1,6 @@
 using System.Reflection;
 using Anchor.Core;
+using WindowList = Anchor.Core.Windows;
 
 namespace Anchor;
 
@@ -91,7 +92,7 @@ sealed class TrayApp : ApplicationContext
         try
         {
             string sig = Geometry.Signature(Monitors.GetAll());
-            bool holdOff = _watcher.State == Watcher.Phase.Disturbed && Windows.FullscreenAppInFront();
+            bool holdOff = _watcher.State == Watcher.Phase.Disturbed && WindowList.FullscreenAppInFront();
             action = _watcher.Tick(sig, holdOff);
         }
         catch (Exception ex) { Log.Write("Tick failed: " + ex.Message); return; }
