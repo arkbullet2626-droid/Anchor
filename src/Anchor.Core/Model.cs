@@ -60,6 +60,7 @@ public sealed class Snapshot
 {
     public DateTime TakenUtc { get; set; }
     public string SetupKey { get; set; } = "";
+    public string Signature { get; set; } = "";
     public List<MonitorInfo> Monitors { get; set; } = new();
     public List<WindowEntry> Windows { get; set; } = new();
 
@@ -79,11 +80,21 @@ public sealed class SetupMemory
 {
     public string Name { get; set; } = "";
     public List<MonitorInfo> Monitors { get; set; } = new();
-    /// <summary>The last good automatic snapshot.</summary>
-    public Snapshot? Auto { get; set; }
+    /// <summary>The last good automatic snapshot for each arrangement of these monitors
+    /// (resolution and position). A game at a lower resolution gets its own entry, so it never
+    /// overwrites your normal layout.</summary>
+    public Dictionary<string, Arrangement> Arrangements { get; set; } = new();
     /// <summary>The layout the person saved with "Save layout".</summary>
     public Snapshot? Saved { get; set; }
     public DateTime LastSeenUtc { get; set; }
+}
+
+public sealed class Arrangement
+{
+    public Snapshot? Auto { get; set; }
+    /// <summary>How long things were calm in this arrangement. The one used most is the "usual" one.</summary>
+    public double CalmSeconds { get; set; }
+    public DateTime LastUsedUtc { get; set; }
 }
 
 public sealed class RestoreResult

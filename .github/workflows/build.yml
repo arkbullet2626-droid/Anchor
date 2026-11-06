@@ -52,6 +52,9 @@ jobs:
           if (Select-String -Path "$folder\anchor.log" -Pattern 'Unhandled' -Quiet) { throw "Unhandled error in log" }
           (Get-Item publish\Anchor.exe).Length / 1MB | ForEach-Object { "Anchor.exe size: {0:N1} MB" -f $_ }
 
+      - name: End-to-end (real Anchor.exe, game-style resolution change)
+        run: dotnet tests/Anchor.Tests/bin/Release/net8.0/Anchor.Tests.dll --e2e publish/Anchor.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: Anchor

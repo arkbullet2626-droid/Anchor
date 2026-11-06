@@ -3,10 +3,17 @@ namespace Anchor.Core;
 /// <summary>Anchor's brain: takes snapshots, restores them and remembers how to undo.</summary>
 public sealed class Engine
 {
+    /// <summary>An arrangement must have been used this long before Anchor restores into it on its own,
+    /// so a brief in-between state (one monitor waking before the other) never counts as "usual".</summary>
+    public static readonly double MinCalmSecondsForAuto =
+        double.TryParse(Environment.GetEnvironmentVariable("ANCHOR_TEST_MIN_CALM_SECONDS"), out var s) ? s : 120; // tests only
+    const int MaxArrangementsPerSetup = 6;
+
     readonly LayoutStore _store;
     readonly object _gate = new();
     DateTime _lastPersistUtc = DateTime.MinValue;
     bool _dirty;
+    Snapshot? _autoUndo; // undo shared by an automatic restore and its follow-up
 
     public Engine(string folder)
     {
@@ -30,6 +37,7 @@ public sealed class Engine
         {
             TakenUtc = DateTime.UtcNow,
             SetupKey = Geometry.SetupKey(mons),
+            Signature = Geometry.Signature(mons),
             Monitors = mons,
             Windows = Windows.Capture(mons, IncludeOwnProcess),
         };
@@ -40,14 +48,22 @@ public sealed class Engine
     }
 
     /// <summary>Called every few seconds while things are calm: remember where everything is.</summary>
-    public Snapshot TakeAutoSnapshot()
+    /// <param name="calmSeconds">Time since the previous snapshot, counted towards this arrangement being the usual one.</param>
+    public Snapshot TakeAutoSnapshot(double calmSeconds)
     {
         var snap = Capture();
         lock (_gate)
         {
             var mem = _store.Get(snap.SetupKey, snap.Monitors);
-            if (!snap.SameLayout(mem.Auto)) _dirty = true;
-            mem.Auto = snap;
+            if (!mem.Arrangements.TryGetValue(snap.Signature, out var arr))
+            {
+                mem.Arrangements[snap.Signature] = arr = new Arrangement();
+                Prune(mem);
+            }
+            if (!snap.SameLayout(arr.Auto)) _dirty = true;
+            arr.Auto = snap;
+            arr.CalmSeconds += Math.Clamp(calmSeconds, 0, 60);
+            arr.LastUsedUtc = DateTime.UtcNow;
             // Writing to disk is only needed so a layout survives Anchor restarting; keep it occasional.
             if (_dirty && DateTime.UtcNow - _lastPersistUtc > TimeSpan.FromSeconds(30))
             {
@@ -57,6 +73,19 @@ public sealed class Engine
         return snap;
     }
 
+    static void Prune(SetupMemory mem)
+    {
+        while (mem.Arrangements.Count > MaxArrangementsPerSetup)
+        {
+            string usual = Usual(mem) ?? "";
+            var oldest = mem.Arrangements.Where(kv => kv.Key != usual).MinBy(kv => kv.Value.LastUsedUtc).Key;
+            mem.Arrangements.Remove(oldest);
+        }
+    }
+
+    static string? Usual(SetupMemory mem) =>
+        mem.Arrangements.Count == 0 ? null : mem.Arrangements.MaxBy(kv => kv.Value.CalmSeconds).Key;
+
     /// <summary>"Save layout": remember the current layout for this monitor setup.</summary>
     public Snapshot SaveLayout()
     {
@@ -65,7 +94,6 @@ public sealed class Engine
         {
             var mem = _store.Get(snap.SetupKey, snap.Monitors);
             mem.Saved = snap;
-            mem.Auto = snap;
             _store.Save(); _dirty = false; _lastPersistUtc = DateTime.UtcNow;
         }
         Log.Write($"Saved layout: {snap.Windows.Count} windows on {CurrentSetupName}");
@@ -82,16 +110,68 @@ public sealed class Engine
     public RestoreResult? RestoreNow()
     {
         var mons = Monitors.GetAll();
+        string sig = Geometry.Signature(mons);
         Snapshot? src; bool saved;
         lock (_gate)
         {
             var mem = _store.Get(Geometry.SetupKey(mons), mons);
             saved = mem.Saved != null;
-            src = mem.Saved ?? mem.Auto;
+            src = mem.Saved
+                  ?? (mem.Arrangements.TryGetValue(sig, out var a) ? a.Auto : null)
+                  ?? mem.Arrangements.Values.Where(x => x.Auto != null).MaxBy(x => x.LastUsedUtc)?.Auto;
         }
         if (src == null) return null;
         Log.Write($"Restore now from {(saved ? "saved layout" : "last snapshot")} ({src.Windows.Count} windows)");
         return Restore(src, looseMatch: saved);
+    }
+
+    /// <summary>
+    /// Automatic restore after things settle. Only restores into the arrangement these monitors are
+    /// usually in, so a game's temporary resolution is left alone.
+    /// </summary>
+    /// <param name="followUp">The second pass a few seconds later; its moves join the same undo.</param>
+    public RestoreResult? AutoRestore(bool followUp, out string why)
+    {
+        var mons = Monitors.GetAll();
+        string key = Geometry.SetupKey(mons), sig = Geometry.Signature(mons);
+        Snapshot? src;
+        lock (_gate)
+        {
+            var mem = _store.Get(key, mons);
+            CurrentSetupName = mem.Name;
+            CurrentMonitorCount = mons.Count;
+            src = ChooseAuto(mem, sig, out why);
+            if (src == null) return null;
+        }
+        why = "";
+        var r = RestoreCore(src, looseMatch: false);
+        if (!followUp) _autoUndo = null;
+        if (r.Moved > 0 && r.Undo != null)
+        {
+            if (_autoUndo != null)
+            {
+                // Same event: keep the earliest "before" position of each window in one undo.
+                var have = _autoUndo.Windows.Select(w => w.Hwnd).ToHashSet();
+                _autoUndo.Windows.AddRange(r.Undo.Windows.Where(w => !have.Contains(w.Hwnd)));
+            }
+            else _autoUndo = r.Undo;
+            LastUndo = _autoUndo;
+        }
+        Log.Write($"Auto restore{(followUp ? " (follow-up)" : "")}: {r.Summary()}");
+        return r;
+    }
+
+    /// <summary>Which snapshot an automatic restore may use right now, or null and why not.</summary>
+    public static Snapshot? ChooseAuto(SetupMemory mem, string sig, out string why)
+    {
+        if (!mem.Arrangements.TryGetValue(sig, out var arr) || arr.Auto == null)
+        { why = "no snapshot for this arrangement yet"; return null; }
+        if (Usual(mem) != sig)
+        { why = "not the usual resolution for these monitors (a game?)"; return null; }
+        if (arr.CalmSeconds < MinCalmSecondsForAuto)
+        { why = "this arrangement hasn't been used long enough yet"; return null; }
+        why = "";
+        return arr.Auto;
     }
 
     /// <summary>Puts windows back where <paramref name="snap"/> says, and keeps an undo.</summary>
@@ -120,7 +200,10 @@ public sealed class Engine
         var live = Windows.Capture(mons, IncludeOwnProcess);
         var savedMons = snap.Monitors.ToDictionary(m => m.Id);
         var nowMons = mons.ToDictionary(m => m.Id);
-        var undo = new Snapshot { TakenUtc = DateTime.UtcNow, SetupKey = Geometry.SetupKey(mons), Monitors = mons };
+        var undo = new Snapshot
+        {
+            TakenUtc = DateTime.UtcNow, SetupKey = Geometry.SetupKey(mons), Signature = Geometry.Signature(mons), Monitors = mons,
+        };
         var toSettle = new List<(WindowEntry live, RectI rect)>();
 
         var pairs = Matcher.Match(snap.Windows, live, looseMatch);

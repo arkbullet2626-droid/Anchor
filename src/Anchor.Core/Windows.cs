@@ -256,5 +256,17 @@ public static class Windows
         while (!cond() && sw.ElapsedMilliseconds < ms) Thread.Sleep(15);
     }
 
+    /// <summary>True while a fullscreen game, video or presentation is in front. Anchor waits rather than
+    /// move windows around behind it.</summary>
+    public static bool FullscreenAppInFront()
+    {
+        try
+        {
+            // 2 = busy (fullscreen app), 3 = Direct3D fullscreen game, 4 = presentation mode
+            return Native.SHQueryUserNotificationState(out int s) == 0 && s is 2 or 3 or 4;
+        }
+        catch { return false; }
+    }
+
     public static string Short(string s) => s.Length <= 40 ? s : s[..37] + "...";
 }

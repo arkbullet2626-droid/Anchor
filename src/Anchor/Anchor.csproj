@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>Anchor</AssemblyName>
     <RootNamespace>Anchor</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Company>Opifex Studios</Company>
     <Product>Anchor</Product>
     <Description>Anchor by Opifex Studios</Description>

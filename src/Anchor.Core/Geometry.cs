@@ -63,6 +63,11 @@ public static class Geometry
     public static string SetupKey(IEnumerable<MonitorInfo> mons) =>
         string.Join("|", mons.Select(m => m.Id).OrderBy(s => s, StringComparer.Ordinal));
 
+    /// <summary>Key for one arrangement of a setup: which monitors, where, at what resolution, which is primary.</summary>
+    public static string Signature(IEnumerable<MonitorInfo> mons) =>
+        string.Join("|", mons.OrderBy(m => m.Id, StringComparer.Ordinal)
+            .Select(m => $"{m.Id}@{m.Bounds.Left},{m.Bounds.Top},{m.Bounds.Width}x{m.Bounds.Height}{(m.Primary ? "*" : "")}"));
+
     public static string SetupName(IReadOnlyList<MonitorInfo> mons) =>
         mons.Count == 0 ? "No monitors" :
         string.Join(" + ", mons.OrderByDescending(m => m.Primary).ThenBy(m => m.Bounds.Left).Select(m => m.Name));

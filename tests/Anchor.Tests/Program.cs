@@ -7,9 +7,12 @@ using Anchor.Tests;
 
 if (args.Length >= 2 && args[0] == "--host")
     return TestWindowHost.Run(int.Parse(args[1]));
+if (args.Length >= 2 && args[0] == "--e2e")
+    return EndToEnd.Run(args[1]);
 
 var t = new Runner();
 PureTests.All(t);
+WatcherTests.All(t);
 if (OperatingSystem.IsWindows()) RealWindowTests.All(t);
 else Console.WriteLine("(not Windows: skipping real-window tests)");
 return t.Finish();
