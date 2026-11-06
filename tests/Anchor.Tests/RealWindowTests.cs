@@ -143,13 +143,24 @@ public static class RealWindowTests
 
     static Process StartHost(int n, out List<nint> hwnds, out int pid)
     {
-        var psi = new ProcessStartInfo(Environment.ProcessPath!, $"--host {n}")
+        // Started as "dotnet Anchor.Tests.dll" or as "Anchor.Tests.exe": relaunch the same way.
+        string exe = Environment.ProcessPath!;
+        string argsText = Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? $"\"{typeof(RealWindowTests).Assembly.Location}\" --host {n}"
+            : $"--host {n}";
+        var psi = new ProcessStartInfo(exe, argsText)
         {
             RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false,
         };
         var p = Process.Start(psi)!;
         hwnds = new List<nint>();
-        for (int i = 0; i < n; i++) hwnds.Add((nint)long.Parse(p.StandardOutput.ReadLine()!));
+        for (int i = 0; i < n; i++)
+        {
+            string? line = p.StandardOutput.ReadLine();
+            if (line == null || !long.TryParse(line, out long h))
+                throw new Exception($"Test window helper didn't start (said: {line ?? "nothing"})");
+            hwnds.Add((nint)h);
+        }
         pid = p.Id;
         Thread.Sleep(300);
         return p;
