@@ -1,0 +1,69 @@
+name: Build and test on Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        run: dotnet build Anchor.sln -c Release
+
+      - name: Tests (logic + real windows moved between processes)
+        run: dotnet tests/Anchor.Tests/bin/Release/net8.0/Anchor.Tests.dll
+
+      - name: Publish single-file Anchor.exe
+        run: >
+          dotnet publish src/Anchor/Anchor.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -o publish
+
+      - name: Smoke test (Anchor.exe starts, stays running, takes a snapshot)
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:LOCALAPPDATA 'Opifex\Anchor'
+          Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath publish\Anchor.exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) { Get-Content "$folder\anchor.log" -ErrorAction SilentlyContinue; throw "Anchor exited early (code $($p.ExitCode))" }
+          $p.Refresh()
+          "Memory: working set {0:N1} MB, private {1:N1} MB" -f ($p.WorkingSet64/1MB), ($p.PrivateMemorySize64/1MB)
+          # A second copy must exit straight away (one Anchor per sign-in).
+          $q = Start-Process -FilePath publish\Anchor.exe -PassThru
+          if (-not $q.WaitForExit(10000)) { $q.Kill(); throw "Second copy didn't exit" }
+          Stop-Process -Id $p.Id -Force
+          Get-Content "$folder\anchor.log"
+          if (-not (Select-String -Path "$folder\anchor.log" -Pattern 'started' -Quiet)) { throw "No start line in log" }
+          if (-not (Test-Path "$folder\layouts.json")) { throw "No snapshot written" }
+          if (Select-String -Path "$folder\anchor.log" -Pattern 'Unhandled' -Quiet) { throw "Unhandled error in log" }
+          (Get-Item publish\Anchor.exe).Length / 1MB | ForEach-Object { "Anchor.exe size: {0:N1} MB" -f $_ }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Anchor
+          path: publish/Anchor.exe
+
+      # Test builds for Rythm: always the newest passing build of main, no GitHub sign-in needed.
+      - name: Update the "dev" test build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete dev --yes --cleanup-tag 2>$null
+          $notes = "Test build from commit ${{ github.sha }}. Not a release."
+          gh release create dev publish/Anchor.exe --prerelease --title "Test build (dev)" --notes $notes --target ${{ github.sha }}
