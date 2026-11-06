@@ -21,10 +21,10 @@ public static class TestWindowHost
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern nint CreateWindowEx(uint ex, string cls, string title, uint style, int x, int y, int w, int h, nint parent, nint menu, nint inst, nint param);
-    [DllImport("user32.dll")] static extern nint DefWindowProc(nint h, uint m, nint w, nint l);
-    [DllImport("user32.dll")] static extern int GetMessage(out MSG m, nint h, uint min, uint max);
+    [DllImport("user32.dll", EntryPoint = "DefWindowProcW")] static extern nint DefWindowProc(nint h, uint m, nint w, nint l);
+    [DllImport("user32.dll", EntryPoint = "GetMessageW")] static extern int GetMessage(out MSG m, nint h, uint min, uint max);
     [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
-    [DllImport("user32.dll")] static extern nint DispatchMessage(ref MSG m);
+    [DllImport("user32.dll", EntryPoint = "DispatchMessageW")] static extern nint DispatchMessage(ref MSG m);
     [DllImport("user32.dll")] static extern bool PostThreadMessage(uint thread, uint msg, nint w, nint l);
     [DllImport("user32.dll")] static extern bool ShowWindow(nint h, int cmd);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();

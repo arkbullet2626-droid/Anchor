@@ -47,6 +47,7 @@ public static class RealWindowTests
             t.Test("Snapshot sees the test windows with the right states", () =>
             {
                 Assert.Equal(4, snap.Windows.Count, "test windows found");
+                Assert.Equal("Anchor test window A", Get(snap, A).Title, "title read correctly");
                 Assert.Equal(ShowState.Normal, Get(snap, A).State, "A");
                 Assert.Equal(ShowState.Maximized, Get(snap, B).State, "B");
                 Assert.Equal(ShowState.Minimized, Get(snap, C).State, "C");
