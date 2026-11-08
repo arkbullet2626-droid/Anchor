@@ -64,7 +64,7 @@ sealed class SettingsForm : Form
         col.Controls.Add(Note(
             "Windows doesn't let normal apps move windows of programs running as administrator " +
             "(like Task Manager). Anchor skips those unless it runs as administrator too.") .With(l => l.Margin = new Padding(0, 0, 0, 6)));
-        bool elevated = Anchor.Core.Windows.SelfIsAdmin;
+        bool elevated = global::Anchor.Core.Windows.SelfIsAdmin;
         col.Controls.Add(_admin = Check("Always start Anchor as administrator", _s.StartAsAdmin));
         col.Controls.Add(Note("Windows will ask for permission once, when you turn this on or off."));
         var relaunch = new Button
