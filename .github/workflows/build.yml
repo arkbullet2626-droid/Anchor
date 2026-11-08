@@ -12,13 +12,21 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
+      - name: Version number
+        id: ver
+        shell: pwsh
+        run: |
+          $v = ([xml](Get-Content src/Anchor/Anchor.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "Anchor $v"
 
       - name: Build
         run: dotnet build Anchor.sln -c Release
@@ -32,33 +40,81 @@ jobs:
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true -o publish
 
-      - name: Smoke test (Anchor.exe starts, stays running, takes a snapshot)
+      - name: Build installer
         shell: pwsh
         run: |
-          $folder = Join-Path $env:LOCALAPPDATA 'Opifex\Anchor'
-          Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
-          $p = Start-Process -FilePath publish\Anchor.exe -PassThru
-          Start-Sleep -Seconds 10
-          if ($p.HasExited) { Get-Content "$folder\anchor.log" -ErrorAction SilentlyContinue; throw "Anchor exited early (code $($p.ExitCode))" }
-          $p.Refresh()
-          "Memory: working set {0:N1} MB, private {1:N1} MB" -f ($p.WorkingSet64/1MB), ($p.PrivateMemorySize64/1MB)
-          # A second copy must exit straight away (one Anchor per sign-in).
-          $q = Start-Process -FilePath publish\Anchor.exe -PassThru
-          if (-not $q.WaitForExit(10000)) { $q.Kill(); throw "Second copy didn't exit" }
-          Stop-Process -Id $p.Id -Force
-          Get-Content "$folder\anchor.log"
-          if (-not (Select-String -Path "$folder\anchor.log" -Pattern 'started' -Quiet)) { throw "No start line in log" }
-          if (-not (Test-Path "$folder\layouts.json")) { throw "No snapshot written" }
-          if (Select-String -Path "$folder\anchor.log" -Pattern 'Unhandled' -Quiet) { throw "Unhandled error in log" }
-          (Get-Item publish\Anchor.exe).Length / 1MB | ForEach-Object { "Anchor.exe size: {0:N1} MB" -f $_ }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer\Anchor.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+          "AnchorSetup.exe: {0:N1} MB" -f ((Get-Item publish\AnchorSetup.exe).Length / 1MB)
 
-      - name: End-to-end (real Anchor.exe, game-style resolution change)
-        run: dotnet tests/Anchor.Tests/bin/Release/net8.0/Anchor.Tests.dll --e2e publish/Anchor.exe
+      - name: Install, check, measure memory
+        shell: pwsh
+        run: |
+          $data = Join-Path $env:LOCALAPPDATA 'Opifex\Anchor'
+          $app  = Join-Path $env:LOCALAPPDATA 'Programs\Anchor\Anchor.exe'
+          Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+          $p = Start-Process publish\AnchorSetup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=install.log' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { Get-Content install.log; throw "Install failed ($($p.ExitCode))" }
+          if (-not (Test-Path $app)) { throw "Anchor.exe not installed" }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Anchor.lnk")) { throw "No Start menu shortcut" }
+          $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).Anchor
+          if ($run -ne "`"$app`"") { throw "Start-with-Windows entry wrong: '$run'" }
+          "Installed. Start-with-Windows: $run"
+
+          Start-Sleep -Seconds 8
+          $a = Get-Process Anchor -ErrorAction SilentlyContinue
+          if (-not $a) { Get-Content "$data\anchor.log" -ErrorAction SilentlyContinue; throw "Installer didn't start Anchor" }
+          $settings = Get-Content "$data\settings.json" -Raw | ConvertFrom-Json
+          if (-not $settings.StartWithWindows) { throw "settings.json says StartWithWindows false" }
+          if (Test-Path "$data\installer-startup.txt") { throw "Installer choice file not picked up" }
+
+          # A second copy must exit straight away (one Anchor per sign-in).
+          $q = Start-Process $app -PassThru
+          if (-not $q.WaitForExit(10000)) { $q.Kill(); throw "Second copy didn't exit" }
+
+          "Waiting 70 s at rest to measure memory..."
+          $cpu0 = $a.TotalProcessorTime
+          Start-Sleep -Seconds 70
+          $a.Refresh()
+          $cpu = (($a.TotalProcessorTime - $cpu0).TotalSeconds / 70 / [Environment]::ProcessorCount) * 100
+          $pws = (Get-Counter "\Process(Anchor)\Working Set - Private").CounterSamples[0].CookedValue / 1MB
+          "MEMORY  Task Manager 'Memory' (private working set): {0:N1} MB" -f $pws
+          "MEMORY  private bytes: {0:N1} MB, working set: {1:N1} MB" -f ($a.PrivateMemorySize64/1MB), ($a.WorkingSet64/1MB)
+          "CPU     average at rest: {0:N2} %" -f $cpu
+          if ($pws -gt 40) { throw "Memory at rest too high: $pws MB" }
+          if ($cpu -gt 1) { throw "CPU at rest too high: $cpu %" }
+
+          Stop-Process -Id $a.Id -Force
+          Start-Sleep -Seconds 1
+          if (Select-String -Path "$data\anchor.log" -Pattern 'Unhandled' -Quiet) { Get-Content "$data\anchor.log"; throw "Unhandled error in log" }
+          Get-Content "$data\anchor.log"
+
+      - name: End-to-end on the installed Anchor (game-style resolution change)
+        shell: pwsh
+        run: dotnet tests/Anchor.Tests/bin/Release/net8.0/Anchor.Tests.dll --e2e "$env:LOCALAPPDATA\Programs\Anchor\Anchor.exe"
+
+      - name: Uninstall and check nothing is left
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Anchor'
+          Start-Process "$dir\Anchor.exe"; Start-Sleep -Seconds 4   # uninstall must stop a running Anchor
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait
+          Start-Sleep -Seconds 3
+          if (Get-Process Anchor -ErrorAction SilentlyContinue) { throw "Anchor still running after uninstall" }
+          if (Test-Path "$dir\Anchor.exe") { throw "Anchor.exe still there" }
+          if (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Anchor.lnk") { throw "Shortcut still there" }
+          if ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).Anchor) { throw "Start-with-Windows entry still there" }
+          if (Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq 'Anchor' }) { throw "Still in Installed apps" }
+          "Uninstalled cleanly."
 
       - uses: actions/upload-artifact@v4
         with:
           name: Anchor
-          path: publish/Anchor.exe
+          path: |
+            publish/Anchor.exe
+            publish/AnchorSetup.exe
 
       # Test builds for Rythm: always the newest passing build of main, no GitHub sign-in needed.
       - name: Update the "dev" test build
@@ -68,5 +124,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete dev --yes --cleanup-tag 2>$null
-          $notes = "Test build from commit ${{ github.sha }}. Not a release."
-          gh release create dev publish/Anchor.exe --prerelease --title "Test build (dev)" --notes $notes --target ${{ github.sha }}
+          $notes = "Test build of Anchor ${{ steps.ver.outputs.version }} from commit ${{ github.sha }}. Not a release."
+          gh release create dev publish/AnchorSetup.exe publish/Anchor.exe --prerelease --title "Test build (dev)" --notes $notes --target ${{ github.sha }}

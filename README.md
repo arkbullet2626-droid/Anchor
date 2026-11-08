@@ -14,15 +14,17 @@ A tiny, free Windows tray app that remembers where every window belongs (which m
 - Keeps a separate memory for each resolution, so a game's temporary low resolution never overwrites your normal layout.
 - Remembers every window's monitor, position, size and state (normal, maximized, minimized, snapped) every few seconds.
 - Knows *which* monitors are connected by their model and serial number, not their Windows number, and keeps a separate memory for each monitor setup.
-- Tray menu: **Restore now**, **Save layout**, **Undo last restore**, **Pause**, **Quit**.
+- Tray menu: **Restore now**, **Save layout**, **Undo last restore**, **Pause**, **Settings**, **Quit**.
+- Starts with Windows (on by default), so once it's installed there's nothing else to do.
+- Settings: start with Windows, restore notes on or off, optional "start as administrator" (needed only to move windows of admin programs like Task Manager), and the optional update check.
 - Handles mixed scaling (per-monitor DPI), several windows of the same app, and windows that aren't open (skipped quietly).
-- Windows of programs running as administrator can't be moved by a normal app; Anchor skips them and says so.
+- Windows of programs running as administrator can't be moved by a normal app; Anchor skips them, says so, and offers admin mode in Settings.
 
-Coming next: settings, start with Windows, and an installer.
+Installs per user (no admin needed) to `%LOCALAPPDATA%\Programs\Anchor`, and uninstalls cleanly from Installed apps.
 
 ## Privacy
 
-No account, no analytics. Everything Anchor saves stays in `%LOCALAPPDATA%\Opifex\Anchor` on your PC.
+No account, no analytics. Everything Anchor saves stays in `%LOCALAPPDATA%\Opifex\Anchor` on your PC. The only thing Anchor does online is an optional once-a-day check of GitHub for a newer version number, which you can turn off in Settings.
 
 ## Building
 

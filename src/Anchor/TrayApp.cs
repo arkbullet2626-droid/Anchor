@@ -15,8 +15,14 @@ sealed class TrayApp : ApplicationContext
     readonly Watcher _watcher = new(() => DateTime.UtcNow);
     readonly SystemEvents _events = new();
     readonly NotifyIcon _tray;
-    readonly ToolStripMenuItem _header, _restore, _save, _undo, _pause;
+    readonly ToolStripMenuItem _header, _restore, _save, _undo, _pause, _update;
     readonly System.Windows.Forms.Timer _tick;
+    readonly AppSettings _settings;
+    readonly Icon _icon;
+    SettingsForm? _settingsForm;
+    string? _newVersion;
+    DateTime _lastTrimUtc = DateTime.UtcNow;
+    int _ticks;
     int _busy; // 1 while a snapshot, restore or undo is running
     DateTime _lastSnapshotUtc = DateTime.UtcNow;
     RestoreResult? _autoResult; // first auto pass, combined with the follow-up for one message
@@ -26,25 +32,32 @@ sealed class TrayApp : ApplicationContext
 
     public TrayApp()
     {
-        Log.Write($"Anchor {Version} started");
+        _settings = AppSettings.Load(Folder, out bool firstRun);
+        if (_settings.TakeInstallerChoice(Folder) || firstRun) _settings.Save(Folder);
+        Startup.Apply(_settings); // start with Windows: on by default, follows the exe if it moved
+        Log.Write($"Anchor {Version} started{(WindowList.SelfIsAdmin ? " as administrator" : "")}");
+        _icon = LoadIcon();
 
         _header = new ToolStripMenuItem("Anchor") { Enabled = false };
         _restore = new ToolStripMenuItem("Restore now", null, async (_, _) => await RestoreNow());
         _save = new ToolStripMenuItem("Save layout", null, async (_, _) => await SaveLayout());
         _undo = new ToolStripMenuItem("Undo last restore", null, async (_, _) => await Undo()) { Enabled = false };
         _pause = new ToolStripMenuItem("Pause", null, (_, _) => TogglePause());
+        var settings = new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings());
+        _update = new ToolStripMenuItem("Update available", null, (_, _) => Open(UpdateCheck.ReleasesPage))
+        { Visible = false, Font = new Font(SystemFonts.MenuFont ?? Control.DefaultFont, FontStyle.Bold) };
         var quit = new ToolStripMenuItem("Quit", null, (_, _) => Quit());
 
         var menu = new ContextMenuStrip();
         menu.Items.AddRange(new ToolStripItem[]
         {
-            _header, new ToolStripSeparator(), _restore, _save, _undo, _pause, new ToolStripSeparator(), quit,
+            _header, _update, new ToolStripSeparator(), _restore, _save, _undo, _pause, new ToolStripSeparator(), settings, quit,
         });
         menu.Opening += (_, _) => RefreshMenu();
 
         _tray = new NotifyIcon
         {
-            Icon = LoadIcon(),
+            Icon = _icon,
             Text = "Anchor",
             ContextMenuStrip = menu,
             Visible = true,
@@ -80,13 +93,15 @@ sealed class TrayApp : ApplicationContext
     void FirstRunHello()
     {
         string flag = Path.Combine(Folder, "welcomed");
-        if (File.Exists(flag)) return;
+        if (File.Exists(flag) || Program.ReplacingPid != 0) return;
         try { File.WriteAllText(flag, DateTime.Now.ToString("O")); } catch { }
-        Notify("Anchor is running. It remembers where your windows are and puts them back when Windows scrambles them.");
+        Notify("Anchor is running in the tray. It remembers where your windows are and puts them back by itself when Windows scrambles them. Nothing else to do.");
     }
 
     async Task OnTick()
     {
+        _ticks++;
+        if (_ticks % 60 == 30) _ = MaybeCheckForUpdates(); // first check ~30 s after start, then hourly look at the 24 h rule
         if (Volatile.Read(ref _busy) != 0) return;
         Watcher.Action action;
         try
@@ -109,6 +124,11 @@ sealed class TrayApp : ApplicationContext
                     _lastSnapshotUtc = now;
                     await Task.Run(() => _engine.TakeAutoSnapshot(calm));
                     UpdateTooltip();
+                    if (now - _lastTrimUtc > TimeSpan.FromSeconds(60) || _ticks < 20)
+                    {
+                        _lastTrimUtc = now;
+                        await Task.Run(Memory.Trim);
+                    }
                     break;
 
                 case Watcher.Action.Restore:
@@ -129,7 +149,8 @@ sealed class TrayApp : ApplicationContext
                         var combined = new RestoreResult { Moved = moved };
                         foreach (var s in (_autoResult?.SkippedAdmin ?? new()).Concat(r?.SkippedAdmin ?? new()).Distinct())
                             combined.SkippedAdmin.Add(s);
-                        Notify(combined.Summary() + " Undo is in the menu if you didn't want that.");
+                        if (_settings.ShowRestoreNotes) Notify(combined.Summary() + AdminHint(combined) + " Undo is in the menu if you didn't want that.");
+                        else Log.Write("Auto restore done: " + combined.Summary());
                     }
                     _autoResult = null;
                     _lastSnapshotUtc = DateTime.UtcNow;
@@ -141,6 +162,9 @@ sealed class TrayApp : ApplicationContext
         catch (Exception ex) { Log.Write($"{action} failed: {ex}"); }
         finally { Interlocked.Exchange(ref _busy, 0); }
     }
+
+    static string AdminHint(RestoreResult r) =>
+        r.SkippedAdmin.Count > 0 && !WindowList.SelfIsAdmin ? " To move admin windows too, open Settings." : "";
 
     static RestoreResult? Skip(string why)
     {
@@ -154,7 +178,7 @@ sealed class TrayApp : ApplicationContext
         try
         {
             var r = await Task.Run(() => _engine.RestoreNow());
-            Notify(r == null ? "Nothing to restore yet for this monitor setup." : r.Summary());
+            Notify(r == null ? "Nothing to restore yet for this monitor setup." : r.Summary() + AdminHint(r));
         }
         catch (Exception ex) { Log.Write("Restore failed: " + ex); Notify("Something went wrong restoring windows. Details are in Anchor's log."); }
         finally { Interlocked.Exchange(ref _busy, 0); RefreshMenu(); }
@@ -208,7 +232,10 @@ sealed class TrayApp : ApplicationContext
     void RefreshMenu()
     {
         string setup = _engine.CurrentSetupName;
-        _header.Text = string.IsNullOrEmpty(setup) ? $"Anchor {Version}" : $"Anchor {Version}  ·  {setup}";
+        string title = $"Anchor {Version}{(WindowList.SelfIsAdmin ? " (admin)" : "")}";
+        _header.Text = string.IsNullOrEmpty(setup) ? title : $"{title}  ·  {setup}";
+        _update.Visible = _newVersion != null;
+        if (_newVersion != null) _update.Text = $"Get Anchor {_newVersion}";
         _undo.Enabled = _engine.LastUndo != null;
         _pause.Text = _watcher.Paused ? "Resume" : "Pause";
         _pause.Checked = _watcher.Paused;
@@ -225,6 +252,41 @@ sealed class TrayApp : ApplicationContext
 
     static string Plural(int n, string w) => n == 1 ? $"1 {w}" : $"{n} {w}s";
 
+    void ShowSettings()
+    {
+        if (_settingsForm is { IsDisposed: false }) { _settingsForm.Activate(); return; }
+        _settingsForm = new SettingsForm(_settings, Folder, Version, _icon,
+            saved: () => { },
+            relaunched: Quit);
+        _settingsForm.FormClosed += (_, _) => { _settingsForm = null; _ = Task.Run(Memory.Trim); };
+        _settingsForm.Show();
+        _settingsForm.Activate();
+    }
+
+    async Task MaybeCheckForUpdates()
+    {
+        if (!_settings.CheckForUpdates) return;
+        if (DateTime.TryParse(_settings.LastUpdateCheckUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out var last)
+            && DateTime.UtcNow - last < TimeSpan.FromHours(24) && _newVersion == null) return;
+        _settings.LastUpdateCheckUtc = DateTime.UtcNow.ToString("O");
+        _settings.Save(Folder);
+        string? newer = await UpdateCheck.NewerVersionAsync(Version);
+        Log.Write($"Update check: {(newer == null ? "up to date" : "Anchor " + newer + " is available")}");
+        _newVersion = newer;
+        if (newer != null && _settings.UpdateNotifiedVersion != newer)
+        {
+            _settings.UpdateNotifiedVersion = newer;
+            _settings.Save(Folder);
+            Notify($"Anchor {newer} is available. Click the anchor in the tray, then \"Get Anchor {newer}\".");
+        }
+        _ = Task.Run(Memory.Trim);
+    }
+
+    static void Open(string url)
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+    }
+
     void Notify(string text)
     {
         Log.Write("Note: " + text);
@@ -237,6 +299,7 @@ sealed class TrayApp : ApplicationContext
     {
         Log.Write("Quit");
         _tick.Stop();
+        _settingsForm?.Close();
         _engine.Flush();
         _tray.Visible = false;
         ExitThread();
@@ -244,7 +307,7 @@ sealed class TrayApp : ApplicationContext
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _tick.Dispose(); _events.Dispose(); _tray.Dispose(); }
+        if (disposing) { _tick.Dispose(); _events.Dispose(); _tray.Dispose(); _icon.Dispose(); }
         base.Dispose(disposing);
     }
 }
