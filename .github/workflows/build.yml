@@ -12,7 +12,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +55,9 @@ jobs:
           $data = Join-Path $env:LOCALAPPDATA 'Opifex\Anchor'
           $app  = Join-Path $env:LOCALAPPDATA 'Programs\Anchor\Anchor.exe'
           Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
-          $p = Start-Process publish\AnchorSetup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=install.log' -PassThru -Wait
+          # (Start-Process -Wait would also wait for Anchor, which the installer starts and which keeps running.)
+          $p = Start-Process publish\AnchorSetup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=install.log' -PassThru
+          if (-not $p.WaitForExit(120000)) { throw "Installer didn't finish" }
           if ($p.ExitCode -ne 0) { Get-Content install.log; throw "Install failed ($($p.ExitCode))" }
           if (-not (Test-Path $app)) { throw "Anchor.exe not installed" }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Anchor.lnk")) { throw "No Start menu shortcut" }
@@ -100,7 +102,8 @@ jobs:
         run: |
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\Anchor'
           Start-Process "$dir\Anchor.exe"; Start-Sleep -Seconds 4   # uninstall must stop a running Anchor
-          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          if (-not $p.WaitForExit(120000)) { throw "Uninstaller didn't finish" }
           Start-Sleep -Seconds 3
           if (Get-Process Anchor -ErrorAction SilentlyContinue) { throw "Anchor still running after uninstall" }
           if (Test-Path "$dir\Anchor.exe") { throw "Anchor.exe still there" }
