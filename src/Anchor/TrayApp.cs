@@ -35,6 +35,7 @@ sealed class TrayApp : ApplicationContext
         _settings = AppSettings.Load(Folder, out bool firstRun);
         if (_settings.TakeInstallerChoice(Folder) || firstRun) _settings.Save(Folder);
         Startup.Apply(_settings); // start with Windows: on by default, follows the exe if it moved
+        if (_settings.UpdateNotifiedVersion is { } known && UpdateCheck.IsNewer(known, Version)) _newVersion = known;
         Log.Write($"Anchor {Version} started{(WindowList.SelfIsAdmin ? " as administrator" : "")}");
         _icon = LoadIcon();
 
@@ -101,7 +102,7 @@ sealed class TrayApp : ApplicationContext
     async Task OnTick()
     {
         _ticks++;
-        if (_ticks % 60 == 30) _ = MaybeCheckForUpdates(); // first check ~30 s after start, then hourly look at the 24 h rule
+        if (_ticks % 3600 == 30) _ = MaybeCheckForUpdates(); // ~30 s after start, then hourly look at the once-a-day rule
         if (Volatile.Read(ref _busy) != 0) return;
         Watcher.Action action;
         try
@@ -267,7 +268,7 @@ sealed class TrayApp : ApplicationContext
     {
         if (!_settings.CheckForUpdates) return;
         if (DateTime.TryParse(_settings.LastUpdateCheckUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out var last)
-            && DateTime.UtcNow - last < TimeSpan.FromHours(24) && _newVersion == null) return;
+            && DateTime.UtcNow - last < TimeSpan.FromHours(24)) return;
         _settings.LastUpdateCheckUtc = DateTime.UtcNow.ToString("O");
         _settings.Save(Folder);
         string? newer = await UpdateCheck.NewerVersionAsync(Version);
