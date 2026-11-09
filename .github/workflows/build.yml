@@ -3,6 +3,7 @@ name: Build and test on Windows
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -27,6 +28,12 @@ jobs:
           $v = ([xml](Get-Content src/Anchor/Anchor.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           "version=$v" >> $env:GITHUB_OUTPUT
           "Anchor $v"
+
+      - name: Tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_name }}" -ne "v${{ steps.ver.outputs.version }}") { throw "Tag ${{ github.ref_name }} doesn't match version ${{ steps.ver.outputs.version }}" }
 
       - name: Build
         run: dotnet build Anchor.sln -c Release
@@ -129,3 +136,14 @@ jobs:
           gh release delete dev --yes --cleanup-tag 2>$null
           $notes = "Test build of Anchor ${{ steps.ver.outputs.version }} from commit ${{ github.sha }}. Not a release."
           gh release create dev publish/AnchorSetup.exe publish/Anchor.exe --prerelease --title "Test build (dev)" --notes $notes --target ${{ github.sha }}
+
+      # Real releases: only from a version tag, and only after every test above passed.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Copy-Item assets\anchor-256.png publish\anchor-logo.png
+          gh release create "${{ github.ref_name }}" publish/AnchorSetup.exe publish/anchor-logo.png `
+            --title "Anchor ${{ steps.ver.outputs.version }}" --notes-file installer/release-notes.md --verify-tag

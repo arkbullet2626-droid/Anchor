@@ -6,9 +6,13 @@
 
 A tiny, free Windows tray app that remembers where every window belongs (which monitor, position, size, maximized or not) and puts them back when Windows scrambles them: after sleep, a monitor turning off and on, or a game changing resolution.
 
-> **Status: early test version.** Not released yet.
+## Download
 
-## What works so far
+**[Download Anchor for Windows](https://github.com/arkbullet2626-droid/Anchor/releases/latest/download/AnchorSetup.exe)** (free, Windows 10 and 11, 64-bit)
+
+Anchor isn't code-signed yet, so Windows may say "Windows protected your PC". Click **More info → Run anyway**.
+
+## What it does
 
 - **Puts windows back automatically** after sleep, waking the screen, unlocking, a monitor turning off and on, or a game changing the resolution. It waits until things are still, restores within a few seconds, and never fights a fullscreen game.
 - Keeps a separate memory for each resolution, so a game's temporary low resolution never overwrites your normal layout.
@@ -20,11 +24,11 @@ A tiny, free Windows tray app that remembers where every window belongs (which m
 - Handles mixed scaling (per-monitor DPI), several windows of the same app, and windows that aren't open (skipped quietly).
 - Windows of programs running as administrator can't be moved by a normal app; Anchor skips them, says so, and offers admin mode in Settings.
 
-Installs per user (no admin needed) to `%LOCALAPPDATA%\Programs\Anchor`, and uninstalls cleanly from Installed apps.
+Light: a few MB of memory and about 0% CPU at rest. Installs per user (no admin needed) to `%LOCALAPPDATA%\Programs\Anchor`, and uninstalls cleanly from Installed apps.
 
 ## Privacy
 
-No account, no analytics. Everything Anchor saves stays in `%LOCALAPPDATA%\Opifex\Anchor` on your PC. The only thing Anchor does online is an optional once-a-day check of GitHub for a newer version number, which you can turn off in Settings.
+No account, no analytics. Everything Anchor saves stays in `%LOCALAPPDATA%\Opifex\Anchor` on your PC. The only thing Anchor does online is an optional once-a-day check of GitHub for a newer version number, which you can turn off in Settings. Full privacy policy: on opifexstudios.ca.
 
 ## Building
 
