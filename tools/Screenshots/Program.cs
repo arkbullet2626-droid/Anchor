@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace Anchor.Screenshots;
 
@@ -9,7 +10,8 @@ namespace Anchor.Screenshots;
 ///
 /// Staged for the website (everything else is exactly what Anchor shows):
 ///  - the menu header names an example two-monitor setup instead of the CI machine's virtual monitor;
-///  - "Undo last restore" is enabled, as it is right after Anchor has put windows back.
+///  - "Undo last restore" is enabled, as it is right after Anchor has put windows back;
+///  - the admin button reads as it does for a normal (non-admin) user, because CI runs as administrator.
 /// </summary>
 static class Program
 {
@@ -28,6 +30,13 @@ static class Program
         File.WriteAllText(Path.Combine(data, "welcomed"), "screenshots");
 
         ApplicationConfiguration.Initialize();
+        // Plain backdrop so nothing on the CI desktop shows at the edges.
+        var backdrop = new Form
+        {
+            FormBorderStyle = FormBorderStyle.None, BackColor = Color.FromArgb(243, 243, 243), ShowInTaskbar = false,
+            StartPosition = FormStartPosition.Manual, Bounds = Screen.PrimaryScreen!.Bounds,
+        };
+        backdrop.Show();
         var app = (ApplicationContext)Activator.CreateInstance(typeof(TrayApp), nonPublic: true)!;
         int exit = 1;
 
@@ -79,9 +88,27 @@ static class Program
         form.Location = new Point(60, 40);
         form.Activate();
         form.ActiveControl = null; // no focus rectangle on a checkbox
+        foreach (var b in All(form).OfType<Button>().Where(b => b.Text.Contains("administrator")))
+        {
+            b.Text = "Restart Anchor as administrator now";
+            b.Enabled = true;
+        }
         Pump(900);
-        Save(form.Bounds, file);
+        Save(VisibleFrame(form), file);
         form.Close();
+    }
+
+    static IEnumerable<Control> All(Control c) => c.Controls.Cast<Control>().SelectMany(x => All(x).Prepend(x));
+
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(nint hwnd, int attr, out RECT value, int size);
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+
+    /// <summary>The window as you see it, without Windows' invisible resize border.</summary>
+    static Rectangle VisibleFrame(Form f)
+    {
+        if (DwmGetWindowAttribute(f.Handle, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, out var r, Marshal.SizeOf<RECT>()) == 0)
+            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+        return f.Bounds;
     }
 
     static object Field(object o, string name) => o.GetType().GetField(name, Any)!.GetValue(o)!;
