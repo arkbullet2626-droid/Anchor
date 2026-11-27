@@ -1,0 +1,34 @@
+name: Website screenshots
+
+# Renders Anchor's real tray menu and Settings window on a clean Windows machine,
+# so no personal windows, files or names can appear. Download the "screenshots" artifact.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/Screenshots/**'
+      - '.github/workflows/screenshots.yml'
+  workflow_dispatch:
+
+jobs:
+  screenshots:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Render
+        shell: pwsh
+        run: |
+          dotnet build tools/Screenshots/Screenshots.csproj -c Release
+          $exe = Get-ChildItem tools/Screenshots/bin/Release -Recurse -Filter Screenshots.exe | Select-Object -First 1
+          $p = Start-Process $exe.FullName -ArgumentList "$PWD\screenshots" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "Screenshot tool hung" }
+          if ($p.ExitCode -ne 0) { throw "Screenshot tool failed ($($p.ExitCode))" }
+          Get-ChildItem screenshots | ForEach-Object { "$($_.Name): $($_.Length) bytes" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/*.png
